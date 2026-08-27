@@ -56,6 +56,17 @@ CREATE TABLE shifts (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE users (
+    id            BIGSERIAL PRIMARY KEY,
+    employee_id   BIGINT UNIQUE REFERENCES employees(id) ON DELETE SET NULL,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role          user_role NOT NULL DEFAULT 'staff',
+    is_active     BOOLEAN NOT NULL DEFAULT true,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE shift_assignments (
     id          BIGSERIAL PRIMARY KEY,
     employee_id BIGINT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
@@ -77,22 +88,6 @@ CREATE TABLE attendance (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE TABLE users (
-    id            BIGSERIAL PRIMARY KEY,
-    employee_id   BIGINT UNIQUE REFERENCES employees(id) ON DELETE SET NULL,
-    username      TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    role          user_role NOT NULL DEFAULT 'staff',
-    is_active     BOOLEAN NOT NULL DEFAULT true,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Fix forward reference in shift_assignments
-ALTER TABLE shift_assignments
-    ADD CONSTRAINT fk_shift_assignments_created_by
-    FOREIGN KEY (created_by) REFERENCES users(id);
 
 CREATE TABLE audit_logs (
     id            BIGSERIAL PRIMARY KEY,

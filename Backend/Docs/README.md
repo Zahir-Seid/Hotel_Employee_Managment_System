@@ -166,7 +166,7 @@ erDiagram
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose up --build          # Postgres + API, migrations run on startup
 
 # In another shell — create the first superadmin (one-time)
 docker compose run --rm admin createsuperuser
@@ -177,14 +177,21 @@ open http://localhost:8080/docs
 
 ### Without Docker
 
-Requires Go 1.22+, PostgreSQL 16+, `goose` and `sqlc` CLIs.
+**Prerequisites:** Go 1.22+, PostgreSQL 16+
 
 ```bash
-cp .env.example .env   # edit DATABASE_URL to your Postgres
-make migrate-up
-make run               # API on :8080
+# 1. Create the database role and database
+psql -U postgres -h localhost -c "CREATE ROLE hotel WITH LOGIN PASSWORD 'hotel';"
+psql -U postgres -h localhost -c "CREATE DATABASE hotel_ems OWNER hotel;"
 
-# In another shell
+# 2. Run the schema migration
+psql -U hotel -h localhost -d hotel_ems -f migrations/001_init.sql
+
+# 3. Configure environment and start the API
+cp .env.example .env               # edit DATABASE_URL if your Postgres host/port differs
+make run                           # API on :8080
+
+# 4. Create the first superadmin (one-time)
 go run ./cmd/admin createsuperuser
 ```
 

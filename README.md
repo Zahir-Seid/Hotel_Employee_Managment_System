@@ -87,27 +87,38 @@ erDiagram
 
 ## Running Locally
 
-**Prerequisites:** Docker + Docker Compose
+### Option A — Docker Compose (recommended)
 
 ```bash
-# 1. Copy env
+cd Backend
 cp .env.example .env
+docker compose up --build          # starts Postgres + API, runs migrations on startup
 
-# 2. Start Postgres + API
-docker compose up --build
-
-# 3. Create the first superadmin (one-time)
+# In another terminal — create the first superadmin (one-time)
 docker compose run --rm admin createsuperuser
 
-# 4. Open Swagger UI
+# Open Swagger UI
 open http://localhost:8080/docs
 ```
 
-**Without Docker (requires Go 1.22+, PostgreSQL):**
+### Option B — Without Docker
+
+**Prerequisites:** Go 1.22+, PostgreSQL 16+
+
 ```bash
-cp .env.example .env   # edit DATABASE_URL to point to your Postgres
-make migrate-up         # requires goose CLI
-make run                # starts API on :8080
+# 1. Create the database and role
+psql -U postgres -h localhost -c "CREATE ROLE hotel WITH LOGIN PASSWORD 'hotel';"
+psql -U postgres -h localhost -c "CREATE DATABASE hotel_ems OWNER hotel;"
+
+# 2. Run the migration
+psql -U hotel -h localhost -d hotel_ems -f Backend/migrations/001_init.sql
+
+# 3. Configure and run
+cd Backend
+cp .env.example .env               # edit DATABASE_URL if your Postgres is different
+make run                           # API starts on :8080
+
+# 4. Create the first superadmin (one-time)
 go run ./cmd/admin createsuperuser
 ```
 
