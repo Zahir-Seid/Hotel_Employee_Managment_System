@@ -1,49 +1,48 @@
 # Hotel Employee Management System
 
-A backend system for managing hotel staff — employees, departments, roles, shifts,
-and attendance — with JWT-based RBAC, audit logging, and a CLI-only superadmin
-bootstrap tool, built in Go.
+A full-stack system for managing hotel staff — employees, departments, roles, shifts,
+and attendance — with a Go backend API, JWT-based RBAC, audit logging, and a Next.js
+admin console frontend.
 
 ## Tech Stack
 
 | Layer | Choice |
 |---|---|
-| Language | Go 1.22 |
-| Router | chi |
-| DB access | sqlc (typed SQL, no ORM) |
-| Migrations | goose |
-| Database | PostgreSQL 16 |
-| Auth | JWT (HS256) + bcrypt |
-| API docs | OpenAPI 3.0 + Swagger UI |
+| **Frontend** | Next.js 16, React 19, TypeScript, Tailwind CSS, shadcn/ui |
+| **API client** | Native `fetch` with auto JWT attach + 401 refresh |
+| **Backend** | Go 1.25, chi router, sqlc (typed SQL), goose (migrations) |
+| **Database** | PostgreSQL 16 |
+| **Auth** | JWT (HS256) + bcrypt |
+| **API docs** | OpenAPI 3.0 + Swagger UI at `/docs` |
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Clients
-        SW[Swagger UI]
-        PM[Postman / curl]
+    subgraph FE["Frontend (Next.js — :3000)"]
+        UI[SPA Admin Console]
+        AUTH[AuthContext + useAuth]
+        HOOKS[Data-fetching hooks]
+        APICLIENT[apiFetch — auto JWT + refresh]
     end
 
-    subgraph MainExe["main.exe (API)"]
+    subgraph BE["Backend (Go — :8080)"]
         R[chi Router]
-        MW[Middleware: Recover → Logger → Auth → RBAC]
+        MW[Recover → Logger → CORS → Auth → RBAC]
         H[Handlers]
-        S[Services]
-        REPO[Repository - sqlc]
+        S[Services — business rules + tx]
+        REPO[Repository — sqlc]
     end
 
-    subgraph AdminExe["admin.exe (CLI)"]
+    subgraph CLI["admin.exe (privileged CLI)"]
         CMD[createsuperuser / reset-password]
-        AREPO[Repository - shared]
     end
 
     DB[(PostgreSQL)]
 
-    SW --> R
-    PM --> R
+    UI --> AUTH --> HOOKS --> APICLIENT -->|HTTPS + JWT| R
     R --> MW --> H --> S --> REPO --> DB
-    CMD --> AREPO --> DB
+    CMD --> REPO
 ```
 
 **Modular monolith** — one deployable service (`main.exe`) plus a separate privileged
@@ -84,27 +83,43 @@ erDiagram
 | **Separate admin.exe** | The only way to mint a `super_admin` is via CLI with DB access — the API explicitly rejects creating/promoting to `super_admin`. |
 | **Audit in service layer** | Captures true before/after domain state, not just the raw HTTP request body. Commits atomically with the mutation. |
 | **No microservices** | One database, one service — matches the actual scale. A message queue would be unjustified. |
+| **SPA over Next.js pages** | The admin console is a single-page app with client-side routing — simpler state, fewer route round-trips. |
+| **JWT in localStorage** | Stateless auth, auto-refresh on 401. Tokens never stored in cookies to avoid CSRF complexity. |
 
 ## Running Locally
 
-### Option A — Docker Compose (recommended)
+### Quick start (3 terminals)
 
+**Terminal 1 — Database & Backend:**
 ```bash
 cd Backend
 cp .env.example .env
-docker compose up --build          # starts Postgres + API, runs migrations on startup
-
-# In another terminal — create the first superadmin (one-time)
-docker compose run --rm admin createsuperuser
-
-# Open Swagger UI
-open http://localhost:8080/docs
+docker compose up --build          # Postgres + API on :8080, migrations run on startup
 ```
 
-### Option B — Without Docker
+**Terminal 2 — Create the first superadmin (one-time):**
+```bash
+cd Backend
+docker compose run --rm admin createsuperuser
+```
 
-**Prerequisites:** Go 1.22+, PostgreSQL 16+
+**Terminal 3 — Frontend:**
+```bash
+cd Frontend
+cp .env.example .env.local
+bun install
+bun dev                            # Admin console on :3000
+```
 
+Then open:
+- Admin console: `http://localhost:3000`
+- Swagger UI: `http://localhost:8080/docs`
+
+### Without Docker
+
+**Prerequisites:** Go 1.22+, PostgreSQL 16+, Bun (or Node 18+)
+
+**Backend:**
 ```bash
 # 1. Create the database and role
 psql -U postgres -h localhost -c "CREATE ROLE hotel WITH LOGIN PASSWORD 'hotel';"
@@ -116,10 +131,18 @@ psql -U hotel -h localhost -d hotel_ems -f Backend/migrations/001_init.sql
 # 3. Configure and run
 cd Backend
 cp .env.example .env               # edit DATABASE_URL if your Postgres is different
-make run                           # API starts on :8080
+make run                           # API on :8080
 
 # 4. Create the first superadmin (one-time)
 go run ./cmd/admin createsuperuser
+```
+
+**Frontend:**
+```bash
+cd Frontend
+cp .env.example .env.local
+bun install
+bun dev                            # Admin console on :3000
 ```
 
 ## API Endpoints
@@ -127,24 +150,25 @@ go run ./cmd/admin createsuperuser
 | Resource | Endpoints |
 |---|---|
 | Auth | `POST /auth/login`, `POST /auth/refresh` |
-| Employees | `GET/POST /employees`, `GET/PUT/DELETE /employees/{id}` |
+| Dashboard | `GET /dashboard` |
+| Employees | `GET/POST /employees`, `GET/PUT/DELETE /employees/{id}`, `POST /employees/{id}/department`, `POST /employees/{id}/role` |
 | Departments | `GET/POST /departments`, `GET/PUT/DELETE /departments/{id}` |
 | Roles | `GET/POST /roles`, `GET/PUT/DELETE /roles/{id}` |
 | Shifts | `GET/POST /shifts`, `GET/PUT/DELETE /shifts/{id}` |
-| Shift Assignments | `GET/POST /shift-assignments`, `DELETE /shift-assignments/{id}` |
-| Attendance | `POST /attendance/check-in`, `POST /attendance/check-out` |
+| Shift Assignments | `GET/POST /shift-assignments`, `DELETE /shift-assignments/{id}`, `GET /employees/{id}/shifts` |
+| Attendance | `POST /attendance/check-in`, `POST /attendance/check-out`, `GET /employees/{id}/attendance` |
 | Reports | `GET /reports/attendance-summary`, `GET /reports/department-staffing`, `GET /reports/shift-coverage-gaps` |
 | Users | `GET/POST /users`, `GET/PUT/DELETE /users/{id}` *(super_admin only)* |
 | Audit Logs | `GET /audit-logs` *(super_admin + hr_manager)* |
 
-Full contract: `openapi/openapi.yaml` — browsable at `/docs` when the API is running.
+Full contract: `Backend/openapi/openapi.yaml` — browsable at `/docs` when the API is running.
 
 ## Reports
 
 Three report endpoints. The shift-coverage-gap report is the non-trivial one — it
 combines a generated date series with an anti-join to surface:
 
-- **NO_STAFF_ASSIGNED** — a shift template with zero employees assigned
+- **NO_STAFF_ASSIGNED** — shift template with zero employees assigned
 - **FULL_NO_SHOW** — everyone assigned was absent
 - **PARTIAL_COVERAGE** — some assigned employees showed, some didn't
 
@@ -154,28 +178,43 @@ A naive `SELECT * FROM attendance WHERE status='absent'` would miss the case whe
 ## Project Structure
 
 ```
-cmd/api/         → HTTP server entrypoint
-cmd/admin/       → CLI entrypoint (createsuperuser, reset-password, list-users)
-internal/
-  config/        → env loading
-  db/            → connection pool + sqlc generated code
-  domain/        → entities, enums, repository interfaces (ports)
-  repository/    → sqlc-backed implementations
-  service/       → business rules + transaction boundaries
-  handler/       → HTTP handlers + request/response DTOs
-  middleware/    → auth, RBAC, logger, recover
-  audit/         → audit log writer
-  auth/          → JWT + bcrypt
-migrations/      → goose SQL migrations
-openapi/         → OpenAPI 3.0 spec
-Docs/            → PRD, SDD, ARCHITECTURE, APP_FLOW, diagrams
+Backend/
+  cmd/api/         → HTTP server entrypoint
+  cmd/admin/       → CLI entrypoint (createsuperuser, reset-password)
+  internal/
+    config/        → env loading
+    db/            → connection pool + sqlc generated code
+    domain/        → entities, enums, repository interfaces (ports)
+    repository/    → sqlc-backed implementations
+    service/       → business rules + transaction boundaries
+    handler/       → HTTP handlers + request/response DTOs
+    middleware/    → auth, RBAC, logger, recover
+    audit/         → audit log writer
+    auth/          → JWT + bcrypt
+  migrations/      → goose SQL migrations
+  openapi/         → OpenAPI 3.0 spec
+  Docs/            → PRD, SDD, ARCHITECTURE, APP_FLOW
+
+Frontend/
+  src/
+    app/           → Next.js app router (login page, root layout)
+      login/       → standalone login page
+    components/
+      hems/        → 16 custom business components (Dashboard, Employees, etc.)
+      ui/          → shadcn/ui primitives
+    hooks/         → React hooks (useAuth, useEmployees, useDashboard, ...)
+    lib/
+      api.ts       → apiFetch client with JWT auto-refresh
+      types.ts     → TypeScript types aligned with backend Go models
+      utils.ts     → cn() helper
+  .env.example     → NEXT_PUBLIC_API_URL config
 ```
 
 ## Documentation
 
 | Doc | Description |
 |---|---|
-| [PRD](Docs/PRD.md) | Product requirements and scope |
-| [SDD](Docs/SDD.md) | Software design — data model, API surface, reports, auth |
-| [ARCHITECTURE](Docs/ARCHITECTURE.md) | Why the layers exist, transaction boundaries, security |
-| [APP_FLOW](Docs/APP_FLOW.md) | Sequence diagrams for key flows |
+| [Backend PRD](Backend/Docs/PRD.md) | Product requirements and scope |
+| [Backend SDD](Backend/Docs/SDD.md) | Software design — data model, API surface, reports, auth |
+| [Backend ARCHITECTURE](Backend/Docs/ARCHITECTURE.md) | Why the layers exist, transaction boundaries, security |
+| [Backend APP_FLOW](Backend/Docs/APP_FLOW.md) | Sequence diagrams for key flows |
