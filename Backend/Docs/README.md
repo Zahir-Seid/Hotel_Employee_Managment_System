@@ -1,105 +1,271 @@
-# Hotel Employee Management System
+# Hotel Employee Management System — Backend
 
-A small, cleanly-layered backend for managing hotel staff: employees, departments,
-roles, shifts, and attendance — with real RBAC, audit logging, and a CLI-only
-superadmin bootstrap tool, in Go.
-
-Full design docs: [`docs/PRD.md`](docs/PRD.md) · [`docs/SDD.md`](docs/SDD.md) ·
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/APP_FLOW.md`](docs/APP_FLOW.md) ·
-diagrams in [`docs/diagrams/`](docs/diagrams/).
+Go backend for managing hotel staff: employees, departments, roles, shifts, and
+attendance — with JWT-based RBAC, audit logging, and a separate CLI for superadmin
+bootstrap.
 
 ## Stack
+
 Go 1.22 · chi (router) · sqlc (typed SQL) · goose (migrations) · PostgreSQL 16 ·
-JWT + bcrypt (auth) · OpenAPI 3.0 + Swagger UI (docs).
+JWT + bcrypt (auth) · OpenAPI 3.0 + Swagger UI.
 
-## Architecture in one paragraph
-A modular monolith, not microservices: one Postgres database, one HTTP service
-(`main.exe`), and a separate privileged CLI (`admin.exe`) that talks to the
-database directly and never binds a network port. Requests flow
-`handler → service → repository (sqlc) → Postgres`; the service layer owns
-transaction boundaries and business rules, so e.g. reassigning an employee's
-role (closing the old `employee_roles` row, opening a new one, and writing the
-audit log) happens atomically. See `docs/ARCHITECTURE.md` for the full rationale.
+## Architecture
 
-## Database design in one paragraph
-Nine tables. Role assignment is modeled as history (`employee_roles`, effective
-dated), not a single mutable column, so "who held what role when" is answerable
-and a partial unique index enforces exactly one current role per employee at the
-DB level. Attendance is always tied to a `shift_assignment` (not directly to an
-employee+date), which is what makes the shift-coverage report able to detect
-"assigned but never checked in" — a case a naive query on `attendance` alone
-would miss. Full DDL and rationale in `docs/SDD.md` §4.
+```mermaid
+flowchart TB
+    subgraph Clients
+        SW[Swagger UI]
+        PM[Postman / curl]
+    end
 
-## Key decisions (see docs for full reasoning)
-- **No microservices.** One database, one service — matches the actual scale of
-  the problem; a message queue or separate services would be unjustified.
-- **sqlc over an ORM.** Full control over the non-trivial report queries;
-  compile-time-checked SQL, no hidden N+1s.
-- **admin.exe is a separate binary**, not an API endpoint or seed script — the
-  only way to mint a `super_admin` account is via `admin.exe createsuperuser`,
-  run on the host/container with DB access. The `users` API endpoint explicitly
-  refuses to create or promote to `super_admin`, even for an authenticated
-  super_admin caller.
-- **Audit logging lives in the service layer**, not generic HTTP middleware, so
-  it captures real before/after domain state and commits atomically with the
-  mutation it's logging.
+    subgraph MainExe["main.exe (API service)"]
+        R[chi Router]
+        MW1[Recover]
+        MW2[Request Logger]
+        MW3["Auth (JWT)"]
+        MW4["RBAC (RequireRole)"]
+        H[Handlers]
+        S[Services / business rules]
+        REPO[Repository - sqlc]
+    end
 
-## Project layout
-```
-cmd/api/       → main.exe entrypoint
-cmd/admin/     → admin.exe entrypoint
-internal/      → config, db(sqlc), domain, repository, service, handler, middleware, audit, auth
-migrations/    → goose SQL migrations
-openapi/       → openapi.yaml (Swagger UI served from /docs)
-docs/          → PRD, SDD, ARCHITECTURE, APP_FLOW, diagrams
+    subgraph AdminExe["admin.exe (privileged CLI)"]
+        CMD[createsuperuser / reset-password]
+        AREPO[Repository - shared]
+    end
+
+    DB[(PostgreSQL)]
+
+    SW --> R
+    PM --> R
+    R --> MW1 --> MW2 --> MW3 --> MW4 --> H --> S --> REPO --> DB
+    CMD --> AREPO --> DB
 ```
 
-## Running it locally
+**Modular monolith** — one deployable service (`main.exe`) plus a separate privileged
+CLI (`admin.exe`). Dependencies point inward only:
 
-**Prerequisites:** Docker + Docker Compose, Go 1.22+ (only needed if you want to
-run outside Docker), `sqlc` and `goose` CLIs (only needed if you change queries
-or migrations — the generated code / applied schema is checked in / applied on
-container start).
+```
+handler → service → repository (sqlc) → Postgres
+```
+
+- **handler**: HTTP concerns only — decode request, call service, encode response,
+  map domain errors → HTTP status codes. No SQL, no business rules.
+- **service**: business rules and transaction boundaries. Role reassignment is one
+  service call that closes the old `employee_roles` row, opens a new one, writes the
+  audit log — all in one DB transaction.
+- **repository**: thin wrapper around sqlc-generated queries, implements interfaces
+  defined in `domain` so services depend on an interface, not on sqlc directly.
+- **domain**: plain Go structs/enums + repository interfaces. No sqlc types here.
+
+## Database Design
+
+```mermaid
+erDiagram
+    DEPARTMENTS ||--o{ EMPLOYEES : "has"
+    ROLES ||--o{ EMPLOYEE_ROLES : "assigned via"
+    EMPLOYEES ||--o{ EMPLOYEE_ROLES : "has history of"
+    EMPLOYEES ||--o{ SHIFT_ASSIGNMENTS : "assigned to"
+    SHIFTS ||--o{ SHIFT_ASSIGNMENTS : "template for"
+    SHIFT_ASSIGNMENTS ||--|| ATTENDANCE : "recorded as"
+    EMPLOYEES ||--o| USERS : "may have login"
+    USERS ||--o{ AUDIT_LOGS : "performs"
+
+    DEPARTMENTS {
+        bigint id PK
+        text name
+        text description
+    }
+    ROLES {
+        bigint id PK
+        text name
+        text description
+    }
+    EMPLOYEES {
+        bigint id PK
+        text employee_code
+        text first_name
+        text last_name
+        text email
+        bigint department_id FK
+        date hire_date
+        enum status
+    }
+    EMPLOYEE_ROLES {
+        bigint id PK
+        bigint employee_id FK
+        bigint role_id FK
+        date effective_from
+        date effective_to "NULL = current"
+    }
+    SHIFTS {
+        bigint id PK
+        text name
+        time start_time
+        time end_time
+    }
+    SHIFT_ASSIGNMENTS {
+        bigint id PK
+        bigint employee_id FK
+        bigint shift_id FK
+        date work_date
+        bigint created_by FK
+    }
+    ATTENDANCE {
+        bigint id PK
+        bigint shift_assignment_id FK
+        timestamptz check_in_time
+        timestamptz check_out_time
+        enum status
+        bigint recorded_by FK
+    }
+    USERS {
+        bigint id PK
+        bigint employee_id FK
+        text username
+        text password_hash
+        enum role
+        boolean is_active
+    }
+    AUDIT_LOGS {
+        bigint id PK
+        bigint actor_user_id FK
+        text action
+        text entity_type
+        bigint entity_id
+        jsonb before_data
+        jsonb after_data
+    }
+```
+
+**9 tables.** Key design choices:
+
+- **Role history** — `employee_roles` is effective-dated (`effective_from` /
+  `effective_to`), not a single mutable column. A partial unique index
+  (`ux_employee_roles_current`) enforces exactly one current role per employee at
+  the DB level — not just an application convention.
+- **Attendance tied to assignments** — `attendance` references `shift_assignments`,
+  not directly employee+date. This is what makes the shift-coverage report able to
+  detect "assigned but never checked in" — a case a naive query on `attendance`
+  alone would miss.
+- **Audit trail** — append-only `audit_logs` with JSONB before/after snapshots,
+  written atomically inside the same transaction as the mutation.
+
+## Key Decisions
+
+| Decision | Rationale |
+|---|---|
+| **sqlc over ORM** | Full control over non-trivial report queries. Compile-time-checked SQL, no hidden N+1s. |
+| **Separate admin.exe** | The only way to mint a `super_admin` is via CLI with DB access. The API explicitly refuses to create or promote to `super_admin`, even for an authenticated super_admin caller. |
+| **Audit in service layer** | Captures true before/after domain state, not just the raw HTTP request body. Commits atomically with the mutation. |
+| **No microservices** | One database, one service — matches the actual scale. A message queue or separate services would be unjustified. |
+
+## Running Locally
+
+### With Docker (recommended)
 
 ```bash
-# 1. copy env
 cp .env.example .env
-
-# 2. start Postgres + API (migrations run automatically on API startup)
 docker compose up --build
 
-# 3. in another shell, create the first superadmin (one-time)
-docker compose run --rm admin createsuperuser --username admin --email admin@hotel.com
+# In another shell — create the first superadmin (one-time)
+docker compose run --rm admin createsuperuser
 
-# 4. open Swagger UI
+# Open Swagger UI
 open http://localhost:8080/docs
-
-# 5. log in to get a token
-curl -X POST http://localhost:8080/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"<the password you set>"}'
 ```
 
-**Running tests**
+### Without Docker
+
+Requires Go 1.22+, PostgreSQL 16+, `goose` and `sqlc` CLIs.
+
 ```bash
-go test ./...                 # unit tests (service layer, mocked repos)
-go test ./internal/repository/... -tags=integration   # needs a live test DB
+cp .env.example .env   # edit DATABASE_URL to your Postgres
+make migrate-up
+make run               # API on :8080
+
+# In another shell
+go run ./cmd/admin createsuperuser
 ```
 
-**Regenerating sqlc code / adding a migration**
+### Useful Commands
+
 ```bash
+make build             # build both binaries to bin/
+make test              # run all tests
+make test-integration  # integration tests (needs live DB)
+make sqlc              # regenerate sqlc code
+
+# Add a new migration
 goose -dir migrations postgres "$DATABASE_URL" create add_something sql
-sqlc generate
 ```
 
-## API reference
-Full contract in `openapi/openapi.yaml`, browsable at `/docs` once the service
-is running. Summary table in `docs/SDD.md` §5.
+## Project Layout
+
+```
+cmd/api/main.go          → HTTP server entrypoint
+cmd/admin/main.go        → CLI entrypoint
+internal/
+  config/config.go       → env loading, typed Config struct
+  db/db.go               → pgxpool connection helper
+  db/queries/queries.sql → sqlc source queries
+  db/sqlc/               → generated Go code (models, queries, querier)
+  domain/                → entities, enums, errors, repository interfaces
+  repository/            → sqlc-backed implementations of domain interfaces
+  service/               → business rules, validation, transaction boundaries
+  handler/               → chi HTTP handlers, request/response DTOs
+  middleware/            → auth (JWT), RBAC, logger, recover
+  audit/audit.go         → audit log writer
+  auth/auth.go           → JWT issue/verify, bcrypt hash/check
+migrations/              → goose SQL migrations
+openapi/openapi.yaml     → OpenAPI 3.0 spec
+```
+
+## API Endpoints
+
+| Resource | Endpoints | RBAC |
+|---|---|---|
+| Auth | `POST /auth/login`, `POST /auth/refresh` | Public |
+| Employees | `GET/POST /employees`, `GET/PUT/DELETE /employees/{id}`, `POST /employees/{id}/department`, `POST /employees/{id}/role` | hr_manager, super_admin |
+| Departments | `GET/POST /departments`, `GET/PUT/DELETE /departments/{id}` | hr_manager, super_admin |
+| Roles | `GET/POST /roles`, `GET/PUT/DELETE /roles/{id}` | hr_manager, super_admin |
+| Shifts | `GET/POST /shifts`, `GET/PUT/DELETE /shifts/{id}` | hr_manager, super_admin |
+| Shift Assignments | `GET/POST /shift-assignments`, `DELETE /shift-assignments/{id}`, `GET /employees/{id}/shifts` | hr_manager, super_admin |
+| Attendance | `POST /attendance/check-in`, `POST /attendance/check-out`, `GET /employees/{id}/attendance` | hr_manager, super_admin |
+| Reports | `GET /reports/attendance-summary`, `GET /reports/department-staffing`, `GET /reports/shift-coverage-gaps` | hr_manager, super_admin |
+| Users | `GET/POST /users`, `GET/PUT/DELETE /users/{id}` | super_admin |
+| Audit Logs | `GET /audit-logs` | super_admin, hr_manager |
+
+Full contract: `openapi/openapi.yaml` — browsable at `/docs` when the API is running.
 
 ## Reports
-Three report endpoints ship with this system; the shift-coverage-gap report
-(`GET /reports/shift-coverage-gaps`) is the one worth reading closely — it
-combines a generated date series with an anti-join to surface shifts with zero
-staff assigned *and* shifts where everyone assigned no-showed, which a simple
-filter on the `attendance` table alone cannot detect. Query + explanation in
-`docs/SDD.md` §6.3.
+
+Three report endpoints. The shift-coverage-gap report is the genuinely non-trivial one:
+
+```sql
+-- Combines a generated date series × all shifts, anti-joined against actual
+-- assignments + attendance to surface:
+--   NO_STAFF_ASSIGNED  — shift template with zero employees assigned
+--   FULL_NO_SHOW       — everyone assigned was absent
+--   PARTIAL_COVERAGE   — some showed, some didn't
+```
+
+A naive `SELECT * FROM attendance WHERE status='absent'` would miss the case where
+**no attendance row exists at all**. Full query and explanation in `Docs/SDD.md`.
+
+## Security
+
+- **Passwords**: bcrypt, cost 12
+- **JWT**: short-lived access token (15m) + refresh token (7d), secret from env
+- **SQL injection**: not applicable — sqlc generates parameterized queries only
+- **Privilege escalation**: API rejects creating/promoting to `super_admin`
+- **Audit trail**: append-only, no update/delete endpoint exposed
+
+## Documentation
+
+| Doc | Description |
+|---|---|
+| [PRD](Docs/PRD.md) | Product requirements and scope |
+| [SDD](Docs/SDD.md) | Software design — data model, API surface, reports, auth |
+| [ARCHITECTURE](Docs/ARCHITECTURE.md) | Why the layers exist, transaction boundaries, security |
+| [APP_FLOW](Docs/APP_FLOW.md) | Sequence diagrams for key flows |
