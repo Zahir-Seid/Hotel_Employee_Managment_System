@@ -1,0 +1,40 @@
+flowchart TB
+    subgraph Clients
+        SW[Swagger UI]
+        PM[Postman / curl]
+    end
+
+    subgraph MainExe["main.exe (API service)"]
+        R[chi Router]
+        MW1[Recover]
+        MW2[Request Logger]
+        MW3["Auth (JWT)"]
+        MW4["RBAC (RequireRole)"]
+        MW5[Audit]
+        H[Handlers]
+        S[Services / business rules]
+        REPO[Repository - sqlc generated]
+    end
+
+    subgraph AdminExe["admin.exe (privileged CLI)"]
+        CMD[Cobra/flag commands]
+        AREPO[Repository - shared package]
+    end
+
+    subgraph Data["PostgreSQL"]
+        DB[(hotel_ems database)]
+    end
+
+    subgraph Migrations
+        G[goose migrations]
+    end
+
+    SW --> R
+    PM --> R
+    R --> MW1 --> MW2 --> MW3 --> MW4 --> MW5 --> H --> S --> REPO --> DB
+
+    CMD --> AREPO --> DB
+    G --> DB
+
+    style AdminExe fill:#2a2a2a,color:#fff
+    style MainExe fill:#1a1a2a,color:#fff

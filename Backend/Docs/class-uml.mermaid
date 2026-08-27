@@ -1,0 +1,110 @@
+classDiagram
+    class Department {
+        +int64 ID
+        +string Name
+        +string Description
+    }
+
+    class Role {
+        +int64 ID
+        +string Name
+        +string Description
+    }
+
+    class Employee {
+        +int64 ID
+        +string EmployeeCode
+        +string FirstName
+        +string LastName
+        +string Email
+        +int64 DepartmentID
+        +date HireDate
+        +EmployeeStatus Status
+        +CurrentRole() Role
+    }
+
+    class EmployeeRole {
+        +int64 ID
+        +int64 EmployeeID
+        +int64 RoleID
+        +date EffectiveFrom
+        +date EffectiveTo
+        +IsCurrent() bool
+    }
+
+    class Shift {
+        +int64 ID
+        +string Name
+        +time StartTime
+        +time EndTime
+    }
+
+    class ShiftAssignment {
+        +int64 ID
+        +int64 EmployeeID
+        +int64 ShiftID
+        +date WorkDate
+        +int64 CreatedBy
+    }
+
+    class Attendance {
+        +int64 ID
+        +int64 ShiftAssignmentID
+        +datetime CheckInTime
+        +datetime CheckOutTime
+        +AttendanceStatus Status
+        +ComputeStatus() AttendanceStatus
+    }
+
+    class User {
+        +int64 ID
+        +int64 EmployeeID
+        +string Username
+        +string PasswordHash
+        +UserRole Role
+        +bool IsActive
+    }
+
+    class AuditLog {
+        +int64 ID
+        +int64 ActorUserID
+        +string Action
+        +string EntityType
+        +int64 EntityID
+        +json BeforeData
+        +json AfterData
+    }
+
+    class EmployeeStatus {
+        <<enumeration>>
+        active
+        inactive
+        terminated
+    }
+
+    class AttendanceStatus {
+        <<enumeration>>
+        present
+        late
+        absent
+        half_day
+    }
+
+    class UserRole {
+        <<enumeration>>
+        super_admin
+        hr_manager
+        staff
+    }
+
+    Department "1" --> "0..*" Employee : employs
+    Employee "1" --> "0..*" EmployeeRole : role history
+    Role "1" --> "0..*" EmployeeRole : assigned as
+    Employee "1" --> "0..*" ShiftAssignment : assigned
+    Shift "1" --> "0..*" ShiftAssignment : template for
+    ShiftAssignment "1" --> "1" Attendance : recorded as
+    Employee "0..1" --> "0..1" User : may log in as
+    User "1" --> "0..*" AuditLog : performs
+    Employee --> EmployeeStatus
+    Attendance --> AttendanceStatus
+    User --> UserRole

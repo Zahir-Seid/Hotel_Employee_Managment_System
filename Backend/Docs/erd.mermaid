@@ -1,0 +1,77 @@
+erDiagram
+    DEPARTMENTS ||--o{ EMPLOYEES : "has"
+    ROLES ||--o{ EMPLOYEE_ROLES : "assigned via"
+    EMPLOYEES ||--o{ EMPLOYEE_ROLES : "has history of"
+    EMPLOYEES ||--o{ SHIFT_ASSIGNMENTS : "assigned to"
+    SHIFTS ||--o{ SHIFT_ASSIGNMENTS : "template for"
+    SHIFT_ASSIGNMENTS ||--|| ATTENDANCE : "recorded as"
+    EMPLOYEES ||--o| USERS : "may have login"
+    USERS ||--o{ AUDIT_LOGS : "performs"
+    USERS ||--o{ SHIFT_ASSIGNMENTS : "created by"
+    USERS ||--o{ ATTENDANCE : "recorded by"
+
+    DEPARTMENTS {
+        bigint id PK
+        text name
+        text description
+    }
+    ROLES {
+        bigint id PK
+        text name
+        text description
+    }
+    EMPLOYEES {
+        bigint id PK
+        text employee_code
+        text first_name
+        text last_name
+        text email
+        bigint department_id FK
+        date hire_date
+        enum status
+    }
+    EMPLOYEE_ROLES {
+        bigint id PK
+        bigint employee_id FK
+        bigint role_id FK
+        date effective_from
+        date effective_to "NULL = current"
+    }
+    SHIFTS {
+        bigint id PK
+        text name
+        time start_time
+        time end_time
+    }
+    SHIFT_ASSIGNMENTS {
+        bigint id PK
+        bigint employee_id FK
+        bigint shift_id FK
+        date work_date
+        bigint created_by FK
+    }
+    ATTENDANCE {
+        bigint id PK
+        bigint shift_assignment_id FK
+        timestamptz check_in_time
+        timestamptz check_out_time
+        enum status
+        bigint recorded_by FK
+    }
+    USERS {
+        bigint id PK
+        bigint employee_id FK
+        text username
+        text password_hash
+        enum role
+        boolean is_active
+    }
+    AUDIT_LOGS {
+        bigint id PK
+        bigint actor_user_id FK
+        text action
+        text entity_type
+        bigint entity_id
+        jsonb before_data
+        jsonb after_data
+    }
