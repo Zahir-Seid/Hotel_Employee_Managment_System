@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/hotel-ems/internal/audit"
 	"github.com/hotel-ems/internal/auth"
@@ -61,11 +62,19 @@ func main() {
 	userHandler := handler.NewUserHandler(userSvc)
 	reportHandler := handler.NewReportHandler(reportSvc)
 	auditLogHandler := handler.NewAuditLogHandler(auditLogSvc)
+	dashboardHandler := handler.NewDashboardHandler(empRepo, attRepo, shiftAssignRepo, deptRepo, empRoleRepo, auditRepo)
 
 	r := chi.NewRouter()
+	r.Use(chimiddleware.RedirectSlashes)
 	r.Use(middleware.Recover)
 	r.Use(middleware.Logger)
-	r.Use(cors.AllowAll().Handler)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: true,
+		MaxAge:           43200,
+	}))
 
 	authHandler.RegisterRoutes(r)
 
@@ -80,6 +89,7 @@ func main() {
 			shiftAssignHandler.RegisterRoutes(r)
 			attHandler.RegisterRoutes(r)
 			reportHandler.RegisterRoutes(r)
+			dashboardHandler.RegisterRoutes(r)
 		})
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireRole("super_admin"))
